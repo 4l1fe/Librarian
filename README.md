@@ -6,9 +6,9 @@ I'll found what had been in your mind but hasn't been in there.
 
 ## Usage
 
-### General options
+### Common options
 
-```bash
+```shell
 $ ./librarian.py -h
 usage: librarian.py [-h] [--db DB] [--table TABLE] [--debug] {index,match} ...
 
@@ -30,7 +30,7 @@ available commands:
 
 ```bash
 $ ./librarian.py index -h
-usage: librarian.py index [-h] [--file-extensions string] target
+usage: librarian.py index [-h] [--file-extensions string] [--language LANGUAGE] target
 
 positional arguments:
   target                Directory to build an index on.
@@ -38,15 +38,15 @@ positional arguments:
 optional arguments:
   -h, --help            show this help message and exit
   --file-extensions string
-                        List of file extensions separated by space which to scan only. (default:
-                        frozenset({'.md'}))
+                        List of file extensions separated by space which to scan only. (default: frozenset({'.md'}))
+  --language LANGUAGE
 ```
 
 ### Searching
 
 ```bash
 $ ./librarian.py match -h
-usage: librarian.py match [-h] [--limit LIMIT] [--format {raw,md,csv}] query
+usage: librarian.py match [-h] [--limit LIMIT] [--fields field,...] [--format {raw,md,csv}] query
 
 positional arguments:
   query                 Sqlite query term executed by "MATCH" statement. Syntax can be found on
@@ -55,6 +55,8 @@ positional arguments:
 optional arguments:
   -h, --help            show this help message and exit
   --limit LIMIT         Max count of results. (default: 5)
+  --fields field,...    List of document fields to retrieve separated by comma, order is preserved. Choices: ('name', 'extension',
+                        'sizee', 'created', 'modified'). (default: ('name',))
   --format {raw,md,csv}
                         Chose a results output format. (default: raw)
 ```
