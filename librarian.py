@@ -1,7 +1,6 @@
 #!venv/bin/python
 import sqlite3
 import logging
-import sys
 
 from dataclasses import dataclass, fields as get_fields, astuple
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter as ADHFormatter
@@ -12,7 +11,6 @@ class Config:
     DB_FILE = 'fts.db'
     TABLE_NAME = 'documents'
     FILE_EXTENSIONS = frozenset(('.md', ))
-    MAX_FILE_SIZE = 2 * 1024
     RESULTS_LIMIT = 5
 
 
@@ -20,6 +18,7 @@ class Constants:
     EXCLUDED = 'venv'
     RAW_FORMAT = 'raw'
     MD_FORMAT = 'md'
+    CSV_FORMAT = 'csv'
     SNOWBALL_SO = './fts5stemmer.so'
     STEM_LANGUAGE = 'russian'
     MAX_TOKENS = 10
@@ -30,7 +29,7 @@ class Document:
     name: str
     content: str
     extension: str
-    sizee: str
+    size: str
     created: str
     modified: str
 
@@ -95,8 +94,8 @@ class Librarian:
 
 if __name__ == '__main__':
     parser = ArgumentParser(formatter_class=ADHFormatter)
-    subparsers = parser.add_subparsers(title='available commands', description='Use -h with each to get help.',
-                                       dest='command', metavar='', required=True)
+    subparsers = parser.add_subparsers(title='available commands', description='Use -h with each of them to get help.',
+                                       dest='command', required=True)
     index_parser = subparsers.add_parser('index', formatter_class=ADHFormatter,
                                          help='Command to build a db and index. Have to be run once.')
     match_parser = subparsers.add_parser('match', formatter_class=ADHFormatter,
@@ -104,18 +103,18 @@ if __name__ == '__main__':
 
     parser.add_argument('--db', default=Config.DB_FILE, help='DB file path.')
     parser.add_argument('--table', default=Config.TABLE_NAME, help='Table name to store files content.')
-    parser.add_argument('--debug', action='store_true', help='Print sqlite statements.')
+    parser.add_argument('--debug', action='store_true', help='Print additional events and sqlite statements.')
 
     index_parser.add_argument('target', help='Directory to build an index on.')
-    index_parser.add_argument('--file-extensions', type=set, default=Config.FILE_EXTENSIONS,
-                              help='List of file extensions which to scan only.')
-    index_parser.add_argument('--max-file-size', default=Config.MAX_FILE_SIZE, type=int,
-                              help='File size in kb to avoid including big files into an index.')
+    index_parser.add_argument('--file-extensions', type=frozenset, default=Config.FILE_EXTENSIONS,
+                              metavar='string', help='List of file extensions separated by space which to scan only.')
 
-    match_parser.add_argument('query', help='Sqlite query term executed by "MATCH" statement.')
-    match_parser.add_argument('--limit', default=Config.RESULTS_LIMIT, help='Max count of results')
+    match_parser.add_argument('query', help='Sqlite query term executed by "MATCH" statement. '
+                                            'Syntax can be found on https://sqlite.org/fts5.html#full_text_query_syntax.')
+    match_parser.add_argument('--limit', default=Config.RESULTS_LIMIT, help='Max count of results.')
     match_parser.add_argument('--format', dest='output_format', default=Constants.RAW_FORMAT,
-                               help='Chose an output format.', choices=(Constants.RAW_FORMAT, Constants.MD_FORMAT))
+                               help='Chose a results output format.',
+                              choices=(Constants.RAW_FORMAT, Constants.MD_FORMAT, Constants.CSV_FORMAT))
 
     args = parser.parse_args()
     if not args.command:
