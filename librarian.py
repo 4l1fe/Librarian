@@ -1,6 +1,6 @@
-#!venv/bin/python
 import sqlite3
 import logging
+import sys
 
 from dataclasses import dataclass, fields as get_fields, astuple, field
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter as ADHFormatter, ArgumentTypeError
@@ -15,7 +15,7 @@ class Constants:
     SNOWBALL_SO = './fts5stemmer.so'
     STEM_LANGUAGE = 'russian'
     MAX_TOKENS = 10
-    DB_FILE = 'fts.db'
+    DB_FILE = 'librarian.db'
     TABLE_NAME = 'documents'
     FILE_EXTENSIONS = frozenset(('.md', ))
     RESULTS_LIMIT = 5
@@ -23,17 +23,17 @@ c = Constants
 
 
 class FieldMetadata:
-    OUTPUT = 'output'
+    OUTPUT_DEFAULT = 'output'
     AVAILABLE = 'available'
 fm = FieldMetadata
 
 
 @dataclass(order=True)
 class Document:
-    name: str = field(metadata={fm.OUTPUT: True})
+    name: str = field(metadata={fm.OUTPUT_DEFAULT: True})
     content: str = field(metadata={fm.AVAILABLE: True})
     extension: str
-    sizee: str  # TODO rename
+    size: str
     created: str
     modified: str
 
@@ -58,7 +58,7 @@ class Config:
 
     @staticmethod
     def default_fields() -> tuple:
-        return tuple(f.name for f in get_fields(Document) if f.metadata.get(fm.OUTPUT))
+        return tuple(f.name for f in get_fields(Document) if f.metadata.get(fm.OUTPUT_DEFAULT))
 
     @staticmethod
     def fields_choices() -> tuple:
@@ -67,10 +67,10 @@ class Config:
 
 class Librarian:
 
-    def __init__(self, db=c.DB_FILE, table=c.TABLE_NAME, debug=False):
+    def __init__(self, db=c.DB_FILE, table=c.TABLE_NAME, sql_trace=False):
         self.conn = sqlite3.connect(db)
         self.table = table
-        if debug:
+        if sql_trace:
             self.conn.set_trace_callback(print)
 
     @staticmethod
@@ -98,7 +98,7 @@ class Librarian:
                 logging.debug('Indexed: %s', p.as_posix())
                 content = p.read_text()
                 stats = p.stat()
-                d = Document(name=p.as_posix(), content=content, extension=p.suffix, sizee=stats.st_size,
+                d = Document(name=p.as_posix(), content=content, extension=p.suffix, size=stats.st_size,
                              created=stats.st_ctime, modified=stats.st_mtime)
                 yield astuple(d)
 
@@ -140,7 +140,8 @@ if __name__ == '__main__':
 
     parser.add_argument('--db', default=c.DB_FILE, help='DB file path.')
     parser.add_argument('--table', default=c.TABLE_NAME, help='Table name to store files content.')
-    parser.add_argument('--debug', action='store_true', help='Print additional events and sqlite statements.')
+    parser.add_argument('--debug', action='store_true', help='Flag of print additional events.')
+    parser.add_argument('--sql-trace', action='store_true', help='Flag of print sqlite statements.')
 
     index_parser.add_argument('target', help='Directory to build an index on.')
     index_parser.add_argument('--file-extensions', type=frozenset, default=c.FILE_EXTENSIONS,
@@ -162,9 +163,10 @@ if __name__ == '__main__':
     if not args.command:
         parser.print_help()
 
-    lbn = Librarian(db=args.db, table=args.table, debug=args.debug)
+    lbn = Librarian(db=args.db, table=args.table, sql_trace=args.sql_trace)
     lbn.create_fts5_table()
-    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO, format='%(message)s')
+    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO, stream=sys.stdout,
+                        format='%(message)s')
 
     if args.command == 'index':
         lbn.index(args.target, extensions=args.file_extensions)
