@@ -1,16 +1,20 @@
 import sqlite3
 import logging
 import sys
+import csv
+import io
 
-from dataclasses import dataclass, fields as get_fields, astuple, field
+from dataclasses import dataclass, fields as get_fields, astuple, asdict, field, Field
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter as ADHFormatter, ArgumentTypeError
 from pathlib import Path
+from datetime import datetime
+from abc import ABC
+from typing import Tuple, Generator
 
 
 class Constants:
     EXCLUDED = 'venv'
     RAW_FORMAT = 'raw'
-    MD_FORMAT = 'md'
     CSV_FORMAT = 'csv'
     SNOWBALL_SO = './fts5stemmer.so'
     STEM_LANGUAGE = 'russian'
@@ -23,46 +27,71 @@ c = Constants
 
 
 class FieldMetadata:
-    OUTPUT_DEFAULT = 'output'
-    AVAILABLE = 'available'
+    UNINDEXED = 'unindexed'
+    SUBSTITUTE = 'substitute'
 fm = FieldMetadata
 
 
+@dataclass
+class AbstractDocument(ABC):
+    """repr - output option """
+    name: str = field(repr=True)
+    extension: str = field(repr=False)
+    size: str = field(repr=False, metadata={fm.UNINDEXED: True})
+    created: str = field(repr=False)
+    modified: str = field(repr=False)
+
+    @staticmethod
+    def fields() -> Tuple[Field]:
+        return get_fields(AbstractDocument)
+
+
 @dataclass(order=True)
-class Document:
-    name: str = field(metadata={fm.OUTPUT_DEFAULT: True})
-    content: str = field(metadata={fm.AVAILABLE: True})
-    extension: str
-    size: str
-    created: str
-    modified: str
+class InDocument(AbstractDocument):
+    content: str = field(repr=False)
+
+
+@dataclass(order=True)
+class OutDocument(AbstractDocument):
+    rank: str = field(repr=False)
+    snippet: str = field(repr=True, metadata={fm.SUBSTITUTE: "snippet({table}, -1, '', '', '', {max_tokens})"})
+    rowid: str = field(repr=False)
 
     @staticmethod
-    def _fields_names(excluding=False) -> tuple:
-        fields = tuple(f.name for f in get_fields(Document)
-                       if not f.metadata.get(fm.AVAILABLE, False) or not excluding)
+    def fields() -> Tuple[Field]: # TODO move into AbstractDocument
+        return get_fields(OutDocument)
+
+    @staticmethod
+    def fields_names() -> Tuple[str]:
+        fields = tuple(f.name for f in OutDocument.fields())
         return fields
 
     @staticmethod
-    def fields_names():
-        fields = Document._fields_names()
-        return fields
+    def _repr_fields() -> Generator[Field, None, None]:
+        return (f for f in OutDocument.fields() if f.repr)
 
     @staticmethod
-    def available_fields_names():
-        fields = Document._fields_names(excluding=True)
+    def repr_fields_names() -> Tuple[str]:
+        fields = tuple(f.name for f in OutDocument._repr_fields())
         return fields
+    
+    def to_tuple(self, fields: Tuple[str] = None) -> Tuple[str]:
+        if not fields:
+            fields = self.repr_fields_names()
+        
+        d = asdict(self)
+        return tuple(map(lambda name: d[name], fields))
 
 
 class Config:
 
     @staticmethod
-    def default_fields() -> tuple:
-        return tuple(f.name for f in get_fields(Document) if f.metadata.get(fm.OUTPUT_DEFAULT))
+    def default_fields() -> Tuple[str]:
+        return OutDocument.repr_fields_names()
 
     @staticmethod
-    def fields_choices() -> tuple:
-        return Document.available_fields_names()
+    def fields_choices() -> Tuple[str]:
+        return OutDocument.fields_names()
 
 
 class Librarian:
@@ -74,12 +103,25 @@ class Librarian:
             self.conn.set_trace_callback(print)
 
     @staticmethod
-    def _stringify_fields(fields):
-        return ', '.join(fields)
+    def _stringify_in_fields():
+        names = (f.name + ' UNINDEXED' if f.metadata.get(fm.UNINDEXED) else f.name for f in get_fields(InDocument))
+        return ', '.join(names)
+
+    def _stringify_out_fields(self):
+        fields = OutDocument.fields()
+        names = []
+        for f in fields:
+            name = f.name
+            if f.name == 'snippet':
+                name = f.metadata[fm.SUBSTITUTE]
+                name = name.format(table=self.table, max_tokens=c.MAX_TOKENS)
+            names.append(name)
+
+        return ', '.join(names)
 
     def create_fts5_table(self):
         self.conn.load_extension(c.SNOWBALL_SO)
-        fields = self._stringify_fields(Document.fields_names())
+        fields = self._stringify_in_fields()
         self.conn.execute(f"""CREATE VIRTUAL TABLE IF NOT EXISTS {self.table} 
                               USING FTS5({fields}, tokenize='snowball {c.STEM_LANGUAGE}');""")
 
@@ -98,29 +140,32 @@ class Librarian:
                 logging.debug('Indexed: %s', p.as_posix())
                 content = p.read_text()
                 stats = p.stat()
-                d = Document(name=p.as_posix(), content=content, extension=p.suffix, size=stats.st_size,
-                             created=stats.st_ctime, modified=stats.st_mtime)
+                d = InDocument(name=p.as_posix(),
+                               content=content,
+                               extension=p.suffix,
+                               size=stats.st_size,
+                               created=datetime.utcfromtimestamp(stats.st_ctime).isoformat(),
+                               modified=datetime.utcfromtimestamp(stats.st_mtime).isoformat())
                 yield astuple(d)
 
         with self.conn:
-            placeholder = '(' + ','.join('?' for _ in range(len(get_fields(Document)))) + ')'
+            placeholder = '(' + ','.join('?' for _ in range(len(get_fields(InDocument)))) + ')'
             self.conn.executemany(f"INSERT INTO {self.table} VALUES {placeholder};", list(_documents_iter()))
 
-    def match(self, query, fields: tuple = Document.available_fields_names(), limit=c.RESULTS_LIMIT):
+    def match(self, query, fields: Tuple[str] = None, limit=c.RESULTS_LIMIT) -> Tuple[Tuple[str]]:
         cur = self.conn.cursor()
-        snippet_string = f"snippet({self.table}, -1, '', '', '', {c.MAX_TOKENS})"
-        fields = self._stringify_fields(fields)
-        cur.execute(f"""SELECT {fields}, {snippet_string} 
-                    FROM {self.table} 
-                    WHERE {self.table}  
-                    MATCH '{query}'
-                    LIMIT {limit};""")
-        return cur.fetchall()
+        stringified = self._stringify_out_fields()
+        cur.execute(f"""SELECT {stringified}
+                        FROM {self.table} 
+                        WHERE {self.table}  
+                        MATCH '{query}'
+                        LIMIT {limit};""")
+        return tuple(OutDocument(*row).to_tuple(fields=fields) for row in cur)
 
 
 def fields_type(arg) -> tuple:
     args = arg.strip().split(',')
-    fields = Document.available_fields_names()
+    fields = Config.fields_choices()
     valid_fields = set(args) & set(fields)
     if not valid_fields:
         raise ArgumentTypeError('Has to be contain at least one valid name.')
@@ -129,7 +174,7 @@ def fields_type(arg) -> tuple:
     return tuple(ordered)
 
 
-if __name__ == '__main__':
+def form_args():
     parser = ArgumentParser(formatter_class=ADHFormatter)
     subparsers = parser.add_subparsers(title='available commands', description='Use -h with each of them to get help.',
                                        dest='command', required=True)
@@ -146,7 +191,8 @@ if __name__ == '__main__':
     index_parser.add_argument('target', help='Directory to build an index on.')
     index_parser.add_argument('--file-extensions', type=frozenset, default=c.FILE_EXTENSIONS,
                               metavar='string', help='List of file extensions separated by space which to scan only.')
-    index_parser.add_argument('--language', default=c.STEM_LANGUAGE)  # TODO
+    index_parser.add_argument('--language', default=c.STEM_LANGUAGE,
+                              help="list of available languages https://snowballstem.org/algorithms/")
 
     match_parser.add_argument('query', help='Sqlite query term executed by "MATCH" statement. '
                                             'Syntax can be found on https://sqlite.org/fts5.html#full_text_query_syntax.')
@@ -155,13 +201,18 @@ if __name__ == '__main__':
                               default=Config.default_fields(),
                               help=f'List of document fields to retrieve separated by comma, order is preserved. '
                                    f'Choices: {Config.fields_choices()}.')
-    match_parser.add_argument('--format', dest='output_format', default=c.RAW_FORMAT,
-                              choices=(c.RAW_FORMAT, c.MD_FORMAT, c.CSV_FORMAT),
-                              help='Chose a results output format.')
+    match_parser.add_argument('--format', default=c.RAW_FORMAT,
+                              choices=(c.RAW_FORMAT, c.CSV_FORMAT), help='Choose a results output format.')
 
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
+
+    return args
+
+
+if __name__ == '__main__':
+    args = form_args()
 
     lbn = Librarian(db=args.db, table=args.table, sql_trace=args.sql_trace)
     lbn.create_fts5_table()
@@ -171,5 +222,13 @@ if __name__ == '__main__':
     if args.command == 'index':
         lbn.index(args.target, extensions=args.file_extensions)
     elif args.command == 'match':
+        logging.debug(args.query)
         documents = lbn.match(args.query, fields=args.fields, limit=args.limit)
+        if args.format == c.CSV_FORMAT and documents:
+            out = io.StringIO()
+            writer = csv.writer(out)
+            writer.writerow(args.fields)
+            writer.writerows(documents)
+            documents = out.getvalue()
+
         logging.info(documents)
