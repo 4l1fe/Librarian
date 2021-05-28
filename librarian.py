@@ -35,7 +35,7 @@ fm = FieldMetadata
 @dataclass
 class AbstractDocument(ABC):
     """repr - output option """
-    name: str = field(repr=True)
+    path: str = field(repr=True)
     extension: str = field(repr=False)
     size: str = field(repr=False, metadata={fm.UNINDEXED: True})
     created: str = field(repr=False)
@@ -100,7 +100,7 @@ class Librarian:
 
     @staticmethod
     def _stringify_in_fields():
-        names = (f.name + ' UNINDEXED' if f.metadata.get(fm.UNINDEXED) else f.name for f in get_fields(InDocument))
+        names = (f.path + ' UNINDEXED' if f.metadata.get(fm.UNINDEXED) else f.path for f in get_fields(InDocument))
         return ', '.join(names)
 
     def _stringify_out_fields(self):

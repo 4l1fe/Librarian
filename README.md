@@ -70,8 +70,8 @@ positional arguments:
 optional arguments:
   -h, --help          show this help message and exit
   --limit LIMIT       Max count of results. (default: 5)
-  --fields field,...  List of document fields to retrieve separated by comma, order is preserved. Choices: ('name', 'extension',
-                      'size', 'created', 'modified', 'rank', 'snippet', 'rowid'). (default: ('name', 'snippet'))
+  --fields field,...  List of document fields to retrieve separated by comma, order is preserved. Choices: ('path', 'extension',
+                      'size', 'created', 'modified', 'rank', 'snippet', 'rowid'). (default: ('path', 'snippet'))
   --format {raw,csv}  Choose a results output format. (default: raw)
 ```
 
@@ -83,7 +83,7 @@ Let's build a db.
 $ python librarian.py --debug --sql-trace index ~/Text-files-documents
 SELECT fts5(NULL)
 CREATE REAL TABLE IF NOT EXISTS documents 
-                              USING FTS5(name, content, extension, sizee, created, modified, tokenize='snowball russian');
+                              USING FTS5(path, content, extension, sizee, created, modified, tokenize='snowball russian');
 Excluded: /home/user/Text-files-documents/Today
 Excluded: /home/user/Text-files-documents/Yesterday
 Indexed: /home/user/Text-files-documents/Project/README.md
@@ -93,7 +93,7 @@ Indexed: /home/user/Text-files-documents/Project/README.md
 And try it out.
 
 ```shell
-$ python librarian.py match --fields created,name тесты
+$ python librarian.py match --fields created,path тесты
 [(1620583081.3579128,
  '/home/user/Text-files-documents/Project/README.md',
  'Для запуска тестов нужно поднимать докер-сервисы\n   \n\n### Описание запуска'),
