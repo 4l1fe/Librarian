@@ -8,7 +8,11 @@ from dataclasses import dataclass, fields as get_fields, astuple, asdict, field,
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter as ADHFormatter, ArgumentTypeError
 from pathlib import Path
 from datetime import datetime
-from typing import Tuple, Generator
+from typing import Tuple, Generator, Union
+from zlib import crc32
+
+
+ISO8601 = str
 
 
 class Constants:
@@ -36,9 +40,10 @@ class _BaseDocument:
     """repr - output option """
     path: str = field(repr=True)
     extension: str = field(repr=False)
-    size: str = field(repr=False, metadata={fm.UNINDEXED: True})
+    size: str = field(repr=False)
     created: str = field(repr=False)
     modified: str = field(repr=False)
+    hash: str = field(repr=False)
 
     @classmethod
     def fields(cls) -> Tuple[Field]:
@@ -93,6 +98,7 @@ class Librarian:
 
     def __init__(self, db=c.DB_FILE, table=c.TABLE_NAME, sql_trace=False):
         self.conn = sqlite3.connect(db)
+        self.conn.load_extension(c.SNOWBALL_SO)
         self.table = table
         if sql_trace:
             self.conn.set_trace_callback(print)
@@ -114,16 +120,31 @@ class Librarian:
 
         return ', '.join(names)
 
+    def _hash(self, content: str) -> str:
+        _hash = crc32(content.encode())
+        return str(_hash)
+
+    @staticmethod
+    def _to_iso(timestamp: Union[int, float]) -> ISO8601:
+        return datetime.utcfromtimestamp(timestamp).isoformat()
+
+    def _delete(self, document: OutDocument):
+        self.conn.execute(f"""DELETE FROM {self.table}
+                              WHERE rowid={document.rowid};""")
+        self.conn.commit()
+        logging.info('Deleted: %s', document.path)
+
     def create_fts5_table(self):
-        self.conn.load_extension(c.SNOWBALL_SO)
         fields = self._stringify_in_fields()
         self.conn.execute(f"""CREATE VIRTUAL TABLE IF NOT EXISTS {self.table} 
                               USING FTS5({fields}, tokenize='snowball {c.STEM_LANGUAGE}');""")
 
-    def index(self, target, extensions=c.FILE_EXTENSIONS):
+    def index(self, target, extensions=c.FILE_EXTENSIONS):  # TODO ignore hard, soft links. Check duplications
+        target = Path(target)
 
         def _documents_iter():
-            for p in Path(target).rglob('*'):
+            documents = (target, ) if target.is_file() else target.rglob('*')
+            for p in documents:
                 if c.EXCLUDED in p.as_posix():
                     logging.debug('Excluded: %s', p.as_posix())
                     continue
@@ -139,25 +160,59 @@ class Librarian:
                                content=content,
                                extension=p.suffix,
                                size=stats.st_size,
-                               created=datetime.utcfromtimestamp(stats.st_ctime).isoformat(),
-                               modified=datetime.utcfromtimestamp(stats.st_mtime).isoformat())
+                               created=self._to_iso(stats.st_ctime),
+                               modified=self._to_iso(stats.st_mtime),
+                               hash=self._hash(content))
                 yield astuple(d)
 
         with self.conn:
             placeholder = '(' + ','.join('?' for _ in range(len(InDocument.fields()))) + ')'
             for document in _documents_iter():
-                logging.debug(f'Write: {document}')
+                logging.debug('Write: %s', document)
                 self.conn.execute(f"INSERT INTO {self.table} VALUES {placeholder};", document)
+                self.conn.commit()
 
     def match(self, query, fields: Tuple[str] = None, limit=c.RESULTS_LIMIT) -> Tuple[Tuple[str]]:
         cur = self.conn.cursor()
-        stringified = self._stringify_out_fields()
-        cur.execute(f"""SELECT {stringified}
+        stfd_fields = self._stringify_out_fields()
+        cur.execute(f"""SELECT {stfd_fields}
                         FROM {self.table} 
                         WHERE {self.table}  
                         MATCH '{query}'
                         LIMIT {limit};""")
         return tuple(OutDocument(*row).to_tuple(fields=fields) for row in cur)
+
+    def update(self, clean=False):
+        cur = self.conn.cursor()
+        upd_cur = self.conn.cursor()
+        stfd_fields = self._stringify_out_fields()
+        cur.execute(f"SELECT {stfd_fields} FROM {self.table};")
+
+        for row in cur:
+            d = OutDocument(*row)
+            p = Path(d.path)
+            logging.debug("Check: %s", d.path)
+            if not p.exists():
+                if clean:
+                    self._delete(d)
+                else:
+                    logging.warning("Document doesn't exist: %s", d.path)
+                continue
+
+            stats = p.stat()
+            if self._to_iso(stats.st_mtime) == d.modified:  # Avoiding disk reading
+                continue
+
+            content = p.read_text()
+            check_hash = self._hash(content)
+            if check_hash != d.hash:
+
+                modified = datetime.utcfromtimestamp(stats.st_mtime).isoformat()
+                upd_cur.execute(f"""UPDATE {self.table} 
+                                    SET content='{content}', size={stats.st_size}, modified='{modified}', hash={check_hash} 
+                                    WHERE rowid={d.rowid}""")
+                self.conn.commit()
+                logging.info('Updated: %s', d.path)
 
 
 def fields_type(arg) -> tuple:
@@ -179,13 +234,15 @@ def form_args():
                                          help='Command to build a db and index. Have to be run once.')
     match_parser = subparsers.add_parser('match', formatter_class=ADHFormatter,
                                           help='Command to run query on indexed files.')
+    update_parser = subparsers.add_parser('update', formatter_class=ADHFormatter,
+                                          help='Command to check if content is changed and update in the database.')
 
     parser.add_argument('--db', default=c.DB_FILE, help='DB file path.')
     parser.add_argument('--table', default=c.TABLE_NAME, help='Table name to store files content.')
     parser.add_argument('--debug', action='store_true', help='Flag of print additional events.')
     parser.add_argument('--sql-trace', action='store_true', help='Flag of print sqlite statements.')
 
-    index_parser.add_argument('target', help='Directory to build an index on.')
+    index_parser.add_argument('target', help='Directory or a file to build an index on.')
     index_parser.add_argument('--file-extensions', type=frozenset, default=c.FILE_EXTENSIONS,
                               metavar='string', help='List of file extensions separated by space which to scan only.')
     index_parser.add_argument('--language', default=c.STEM_LANGUAGE,
@@ -201,6 +258,8 @@ def form_args():
     match_parser.add_argument('--format', default=c.RAW_FORMAT,
                               choices=(c.RAW_FORMAT, c.CSV_FORMAT), help='Choose a results output format.')
 
+    update_parser.add_argument('--clean', action='store_true', help="Delete missing file records")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -212,11 +271,11 @@ if __name__ == '__main__':
     args = form_args()
 
     lbn = Librarian(db=args.db, table=args.table, sql_trace=args.sql_trace)
-    lbn.create_fts5_table()
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO, stream=sys.stdout,
                         format='%(message)s')
 
     if args.command == 'index':
+        lbn.create_fts5_table()
         lbn.index(args.target, extensions=args.file_extensions)
     elif args.command == 'match':
         logging.debug(args.query)
@@ -229,3 +288,5 @@ if __name__ == '__main__':
             documents = out.getvalue()
 
         logging.info(documents)
+    elif args.command == 'update':
+        lbn.update(clean=args.clean)

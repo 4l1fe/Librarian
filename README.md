@@ -23,21 +23,22 @@ Simple **cli commands** upon your text files which you want to search through in
 
 ```shell
 $ python librarian.py -h
-usage: librarian.py [-h] [--db DB] [--table TABLE] [--debug] [--sql-trace] {index,match} ...
+usage: librarian.py [-h] [--db DB] [--table TABLE] [--debug] [--sql-trace] {index,match,update} ...
 
 optional arguments:
-  -h, --help     show this help message and exit
-  --db DB        DB file path. (default: librarian.db)
-  --table TABLE  Table name to store files content. (default: documents)
-  --debug        Flag of print additional events. (default: False)
-  --sql-trace    Flag of print sqlite statements. (default: False)
+  -h, --help            show this help message and exit
+  --db DB               DB file path. (default: librarian.db)
+  --table TABLE         Table name to store files content. (default: documents)
+  --debug               Flag of print additional events. (default: False)
+  --sql-trace           Flag of print sqlite statements. (default: False)
 
 available commands:
   Use -h with each of them to get help.
 
-  {index,match}
-    index        Command to build a db and index. Have to be run once.
-    match        Command to run query on indexed files.
+  {index,match,update}
+    index               Command to build a db and index. Have to be run once.
+    match               Command to run query on indexed files.
+    update              Command to check if content is changed and update in the database.
 ```
 
 ### Indexing your text files
@@ -47,7 +48,7 @@ $ python librarian.py index -h
 usage: librarian.py index [-h] [--file-extensions string] [--language LANGUAGE] target
 
 positional arguments:
-  target                Directory to build an index on.
+  target                Directory or a file to build an index on.
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -71,9 +72,22 @@ optional arguments:
   -h, --help          show this help message and exit
   --limit LIMIT       Max count of results. (default: 5)
   --fields field,...  List of document fields to retrieve separated by comma, order is preserved. Choices: ('path', 'extension',
-                      'size', 'created', 'modified', 'rank', 'snippet', 'rowid'). (default: ('path', 'snippet'))
+                      'size', 'created', 'modified', 'hash', 'rank', 'snippet', 'rowid'). (default: ('path', 'snippet'))
   --format {raw,csv}  Choose a results output format. (default: raw)
 ```
+
+### Updating
+
+```shell
+$  python librarian.py update -h
+usage: librarian.py update [-h] [--clean]
+
+optional arguments:
+  -h, --help  show this help message and exit
+  --clean     Delete missing file records (default: False)
+```
+
+
 
 ## Example
 
