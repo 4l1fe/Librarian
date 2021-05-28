@@ -8,7 +8,6 @@ from dataclasses import dataclass, fields as get_fields, astuple, asdict, field,
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter as ADHFormatter, ArgumentTypeError
 from pathlib import Path
 from datetime import datetime
-from abc import ABC
 from typing import Tuple, Generator
 
 
@@ -32,8 +31,8 @@ class FieldMetadata:
 fm = FieldMetadata
 
 
-@dataclass
-class AbstractDocument(ABC):
+@dataclass(order=True)
+class _BaseDocument:
     """repr - output option """
     path: str = field(repr=True)
     extension: str = field(repr=False)
@@ -47,12 +46,12 @@ class AbstractDocument(ABC):
 
 
 @dataclass(order=True)
-class InDocument(AbstractDocument):
+class InDocument(_BaseDocument):
     content: str = field(repr=False)
 
 
 @dataclass(order=True)
-class OutDocument(AbstractDocument):
+class OutDocument(_BaseDocument):
     rank: str = field(repr=False)
     snippet: str = field(repr=True, metadata={fm.SUBSTITUTE: "snippet({table}, -1, '', '', '', {max_tokens})"})
     rowid: str = field(repr=False)
@@ -100,15 +99,15 @@ class Librarian:
 
     @staticmethod
     def _stringify_in_fields():
-        names = (f.path + ' UNINDEXED' if f.metadata.get(fm.UNINDEXED) else f.path for f in get_fields(InDocument))
-        return ', '.join(names)
+        pathes = (f.name + ' UNINDEXED' if f.metadata.get(fm.UNINDEXED) else f.name for f in InDocument.fields())
+        return ', '.join(pathes)
 
     def _stringify_out_fields(self):
         fields = OutDocument.fields()
         names = []
         for f in fields:
             name = f.name
-            if f.name == 'snippet':
+            if name == 'snippet':
                 name = f.metadata[fm.SUBSTITUTE]
                 name = name.format(table=self.table, max_tokens=c.MAX_TOKENS)
             names.append(name)
@@ -119,7 +118,7 @@ class Librarian:
         self.conn.load_extension(c.SNOWBALL_SO)
         fields = self._stringify_in_fields()
         self.conn.execute(f"""CREATE VIRTUAL TABLE IF NOT EXISTS {self.table} 
-                              USING FTS5({fields}, content='', tokenize='snowball {c.STEM_LANGUAGE}');""")
+                              USING FTS5({fields}, tokenize='snowball {c.STEM_LANGUAGE}');""")
 
     def index(self, target, extensions=c.FILE_EXTENSIONS):
 
@@ -136,7 +135,7 @@ class Librarian:
                 logging.debug('Indexed: %s', p.as_posix())
                 content = p.read_text()
                 stats = p.stat()
-                d = InDocument(name=p.as_posix(),
+                d = InDocument(path=p.as_posix(),
                                content=content,
                                extension=p.suffix,
                                size=stats.st_size,
@@ -145,7 +144,7 @@ class Librarian:
                 yield astuple(d)
 
         with self.conn:
-            placeholder = '(' + ','.join('?' for _ in range(len(get_fields(InDocument)))) + ')'
+            placeholder = '(' + ','.join('?' for _ in range(len(InDocument.fields()))) + ')'
             for document in _documents_iter():
                 logging.debug(f'Write: {document}')
                 self.conn.execute(f"INSERT INTO {self.table} VALUES {placeholder};", document)
