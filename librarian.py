@@ -41,9 +41,9 @@ class AbstractDocument(ABC):
     created: str = field(repr=False)
     modified: str = field(repr=False)
 
-    @staticmethod
-    def fields() -> Tuple[Field]:
-        return get_fields(AbstractDocument)
+    @classmethod
+    def fields(cls) -> Tuple[Field]:
+        return get_fields(cls)
 
 
 @dataclass(order=True)
@@ -56,10 +56,6 @@ class OutDocument(AbstractDocument):
     rank: str = field(repr=False)
     snippet: str = field(repr=True, metadata={fm.SUBSTITUTE: "snippet({table}, -1, '', '', '', {max_tokens})"})
     rowid: str = field(repr=False)
-
-    @staticmethod
-    def fields() -> Tuple[Field]: # TODO move into AbstractDocument
-        return get_fields(OutDocument)
 
     @staticmethod
     def fields_names() -> Tuple[str]:
@@ -123,9 +119,9 @@ class Librarian:
         self.conn.load_extension(c.SNOWBALL_SO)
         fields = self._stringify_in_fields()
         self.conn.execute(f"""CREATE VIRTUAL TABLE IF NOT EXISTS {self.table} 
-                              USING FTS5({fields}, tokenize='snowball {c.STEM_LANGUAGE}');""")
+                              USING FTS5({fields}, content='', tokenize='snowball {c.STEM_LANGUAGE}');""")
 
-    def index(self, target, extensions=c.FILE_EXTENSIONS):  # TODO itertools chunked
+    def index(self, target, extensions=c.FILE_EXTENSIONS):
 
         def _documents_iter():
             for p in Path(target).rglob('*'):
@@ -150,7 +146,9 @@ class Librarian:
 
         with self.conn:
             placeholder = '(' + ','.join('?' for _ in range(len(get_fields(InDocument)))) + ')'
-            self.conn.executemany(f"INSERT INTO {self.table} VALUES {placeholder};", list(_documents_iter()))
+            for document in _documents_iter():
+                logging.debug(f'Write: {document}')
+                self.conn.execute(f"INSERT INTO {self.table} VALUES {placeholder};", document)
 
     def match(self, query, fields: Tuple[str] = None, limit=c.RESULTS_LIMIT) -> Tuple[Tuple[str]]:
         cur = self.conn.cursor()
