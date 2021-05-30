@@ -62,18 +62,19 @@ optional arguments:
 
 ```shell
 $ python librarian.py match -h
-usage: librarian.py match [-h] [--limit LIMIT] [--fields field,...] [--format {raw,csv}] query
+usage: librarian.py match [-h] [--limit LIMIT] [--fields field,...] [--format {raw,csv}] [--snippet 1,'','','','',10] query
 
 positional arguments:
-  query               Sqlite query term executed by "MATCH" statement. Syntax can be found on
-                      https://sqlite.org/fts5.html#full_text_query_syntax.
+  query                 Sqlite query term executed by "MATCH" statement. Syntax can be found on https://sqlite.org/fts5.html#full_text_query_syntax.
 
 optional arguments:
-  -h, --help          show this help message and exit
-  --limit LIMIT       Max count of results. (default: 5)
-  --fields field,...  List of document fields to retrieve separated by comma, order is preserved. Choices: ('path', 'extension',
-                      'size', 'created', 'modified', 'hash', 'rank', 'snippet', 'rowid'). (default: ('path', 'snippet'))
-  --format {raw,csv}  Choose a results output format. (default: raw)
+  -h, --help            show this help message and exit
+  --limit LIMIT         Max count of results. (default: 5)
+  --fields field,...    List of document fields to retrieve separated by comma, order is preserved. Choices: ('path', 'extension', 'size', 'created', 'modified', 'hash', 'rank', 'snippet', 'rowid'). (default:
+                        ('path', 'snippet'))
+  --format {raw,csv}    Choose a results output format. (default: csv)
+  --snippet 1,'','','','',10
+                        Snippet properties settings https://sqlite.org/fts5.html#the_snippet_function (default: None)
 ```
 
 ### Updating
