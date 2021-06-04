@@ -5,7 +5,7 @@ import csv
 import io
 
 from dataclasses import dataclass, fields as get_fields, astuple, asdict, field, Field
-from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter as ADHFormatter, ArgumentTypeError
+from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter as ADHFormatter, ArgumentTypeError, Namespace
 from pathlib import Path
 from datetime import datetime
 from typing import Tuple, Generator, Union
@@ -16,7 +16,7 @@ ISO8601 = str
 
 
 class Constants:
-    EXCLUDED = 'venv'
+    EXCLUDED = ('venv', 'node_modules')
     RAW_FORMAT = 'raw'
     CSV_FORMAT = 'csv'
     SNOWBALL_SO = './fts5stemmer.so'
@@ -102,13 +102,12 @@ class OutDocument(_BaseDocument):
 
 class Librarian:
 
-    def __init__(self, db=c.DB_FILE, table=c.TABLE_NAME, sql_trace=False, snippet_props: SnippetProperties = None):
+    def __init__(self, db=c.DB_FILE, table=c.TABLE_NAME, sql_trace=False):
         self.conn = sqlite3.connect(db)
         self.conn.load_extension(c.SNOWBALL_SO)
         self.table = table
         if sql_trace:
             self.conn.set_trace_callback(print)
-        self.custom_out_snippet = None if not snippet_props else Librarian._stringify_out_snippet(table, snippet_props)
 
     @staticmethod
     def _stringify_out_snippet(table, snippet_properties) -> str:
@@ -122,13 +121,14 @@ class Librarian:
         pathes = (f.name + ' UNINDEXED' if f.metadata.get(fm.UNINDEXED) else f.name for f in InDocument.fields())
         return ', '.join(pathes)
 
-    def _stringify_out_fields(self):
+    def _stringify_out_fields(self, snippet_props=None):
         fields = OutDocument.fields()
         names = []
+
         for f in fields:
             name = f.name
             if name == 'snippet':
-                name = self.custom_out_snippet or Librarian._stringify_out_snippet(self.table, f.metadata['properties'])
+                name = Librarian._stringify_out_snippet(self.table, snippet_props or f.metadata['properties'])
             names.append(name)
 
         return ', '.join(names)
@@ -158,7 +158,7 @@ class Librarian:
         def _documents_iter():
             documents = (target, ) if target.is_file() else target.rglob('*')
             for p in documents:
-                if c.EXCLUDED in p.as_posix():
+                if has_excluded(p.as_posix()):
                     logging.debug('Excluded: %s', p.as_posix())
                     continue
 
@@ -185,9 +185,10 @@ class Librarian:
                 self.conn.execute(f"INSERT INTO {self.table} VALUES {placeholder};", document)
                 self.conn.commit()
 
-    def match(self, query, fields: Tuple[str] = None, limit=c.RESULTS_LIMIT) -> Tuple[Tuple[str]]:
+    def match(self, query, fields: Tuple[str] = None, limit=c.RESULTS_LIMIT,
+              snippet_props: SnippetProperties = None) -> Tuple[Tuple[str]]:
         cur = self.conn.cursor()
-        stfd_fields = self._stringify_out_fields()
+        stfd_fields = self._stringify_out_fields(snippet_props=snippet_props)
         cur.execute(f"""SELECT {stfd_fields}
                         FROM {self.table} 
                         WHERE {self.table}  
@@ -257,7 +258,12 @@ class ArgPHelper:
         return SnippetProperties(int(idx), *values, int(maxt))
 
 
-def form_args():
+def has_excluded(string,  excluded=c.EXCLUDED):
+    indices = set(string.find(sub) for sub in excluded)
+    return indices != {-1}  # `-1` the only element if there are no founds
+
+
+def form_args() -> Union[Namespace, None]:
     parser = ArgumentParser(formatter_class=ADHFormatter)
     parser.add_argument('--db', default=c.DB_FILE, help='DB file path.')
     parser.add_argument('--table', default=c.TABLE_NAME, help='Table name to store files content.')
@@ -276,8 +282,9 @@ def form_args():
 
     match_parser = subparsers.add_parser('match', formatter_class=ADHFormatter,
                                           help='Command to run query on indexed files.')
-    match_parser.add_argument('query', help='Sqlite query term executed by "MATCH" statement. '
-                                            'Syntax can be found on https://sqlite.org/fts5.html#full_text_query_syntax.')
+    match_parser.add_argument('query',
+                              help='Sqlite query term executed by "MATCH" statement. Syntax can be found on'
+                                   ' https://sqlite.org/fts5.html#full_text_query_syntax. ')
     match_parser.add_argument('--limit', default=c.RESULTS_LIMIT, help='Max count of results.')
     match_parser.add_argument('--fields', dest='fields', metavar='field,...', type=ArgPHelper.fields_type,
                               default=ArgPHelper.default_fields(),
@@ -299,10 +306,10 @@ def form_args():
     return args
 
 
-if __name__ == '__main__':
+def main():
     args = form_args()
 
-    lbn = Librarian(db=args.db, table=args.table, sql_trace=args.sql_trace, snippet_props=args.snippet)
+    lbn = Librarian(db=args.db, table=args.table, sql_trace=args.sql_trace)
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO, stream=sys.stdout,
                         format='%(message)s')
 
@@ -311,7 +318,7 @@ if __name__ == '__main__':
         lbn.index(args.target, extensions=args.file_extensions)
     elif args.command == 'match':
         logging.debug(args.query)
-        documents = lbn.match(args.query, fields=args.fields, limit=args.limit)
+        documents = lbn.match(args.query, fields=args.fields, limit=args.limit, snippet_props=args.snippet)
         if args.format == c.CSV_FORMAT and documents:
             out = io.StringIO()
             writer = csv.writer(out)
@@ -321,3 +328,7 @@ if __name__ == '__main__':
         logging.info(documents)
     elif args.command == 'update':
         lbn.update(clean=args.clean)
+
+
+if __name__ == '__main__':
+    main()
